@@ -203,13 +203,13 @@ def _render_status_page(job: JobRecord) -> str:
     stage_value = job.status.value
     progress = STAGE_PROGRESS.get(stage_value, 0)
     stage_label = _translate_stage_label(stage_value)
-    stage_eta = _translate_stage_eta(stage_value)
+    stage_eta = _translate_stage_eta(stage_value, job)
     stage_meta_json = json.dumps(
         {
             key: {
                 "progress": STAGE_PROGRESS[key],
                 "label": STAGE_LABELS[key],
-                "eta": STAGE_ETA[key],
+                "eta": _translate_stage_eta(key, job),
             }
             for key in STAGE_PROGRESS
         },
@@ -496,8 +496,41 @@ def _translate_stage_label(stage_value: str) -> str:
     return STAGE_LABELS.get(stage_value, stage_value)
 
 
-def _translate_stage_eta(stage_value: str) -> str:
+def _translate_stage_eta(stage_value: str, job: JobRecord | None = None) -> str:
+    if stage_value in {JobStatus.DONE.value, JobStatus.FAILED.value}:
+        return STAGE_ETA.get(stage_value, "正在估算剩余时间")
+    if job is None:
+        return STAGE_ETA.get(stage_value, "正在估算剩余时间")
+
+    size_bytes = _safe_file_size(job.input_path)
+    if size_bytes >= 200 * 1024 * 1024:
+        eta = {
+            JobStatus.UPLOADED.value: "大视频预计还需 2 到 4 分钟",
+            JobStatus.PRECHECK.value: "预计还需 90 到 180 秒",
+            JobStatus.BASE_ANALYSIS.value: "预计还需 60 到 140 秒",
+            JobStatus.ENHANCED_ANALYSIS.value: "预计还需 50 到 120 秒",
+            JobStatus.RENDERING.value: "预计还需 40 到 90 秒",
+        }
+        return eta.get(stage_value, "正在估算剩余时间")
+
+    if size_bytes >= 80 * 1024 * 1024:
+        eta = {
+            JobStatus.UPLOADED.value: "预计还需 1 到 2 分钟",
+            JobStatus.PRECHECK.value: "预计还需 50 到 100 秒",
+            JobStatus.BASE_ANALYSIS.value: "预计还需 35 到 80 秒",
+            JobStatus.ENHANCED_ANALYSIS.value: "预计还需 25 到 60 秒",
+            JobStatus.RENDERING.value: "预计还需 20 到 45 秒",
+        }
+        return eta.get(stage_value, "正在估算剩余时间")
+
     return STAGE_ETA.get(stage_value, "正在估算剩余时间")
+
+
+def _safe_file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 
 def _download_path(filename: str) -> Path:

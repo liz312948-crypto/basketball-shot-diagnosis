@@ -16,6 +16,9 @@ def test_home_page_loads() -> None:
     assert "投篮动作诊断" in response.text
     assert "上传投篮视频" in response.text
     assert "中文结果 / 精度优先" in response.text
+    assert 'id="uploadStatus"' in response.text
+    assert "xhr.upload.addEventListener(\"progress\"" in response.text
+    assert "正在上传视频" in response.text
 
 
 def test_create_job_returns_job_id() -> None:
@@ -184,6 +187,26 @@ def test_status_page_uses_api_polling_instead_of_full_page_reload(tmp_path) -> N
     assert 'class="stage-dot stage-dot-live"' in response.text
     assert "window.location.replace(\"/jobs/poll-job\")" in response.text
     assert "视频已上传，正在分析" in response.text
+
+
+def test_status_page_uses_larger_eta_for_large_videos(tmp_path) -> None:
+    large_video = tmp_path / "huge.mp4"
+    with large_video.open("wb") as handle:
+        handle.truncate(220 * 1024 * 1024)
+
+    job_store.records["big-job"] = JobRecord(
+        id="big-job",
+        filename="huge.mp4",
+        input_path=large_video,
+        status=JobStatus.RENDERING,
+    )
+
+    client = TestClient(app)
+    response = client.get("/jobs/big-job")
+
+    assert response.status_code == 200
+    assert "预计还需 40 到 90 秒" in response.text
+    assert "预计还需 3 到 8 秒" not in response.text
 
 
 def test_resolve_server_defaults_to_localhost_when_not_on_render(monkeypatch) -> None:

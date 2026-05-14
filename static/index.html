@@ -21,12 +21,15 @@
         <span class="badge">中文结果 / 精度优先</span>
       </div>
 
-      <form action="/process" method="post" enctype="multipart/form-data">
+      <form id="uploadForm" action="/process" method="post" enctype="multipart/form-data">
         <label class="dropzone">
-          <input name="video" type="file" accept="video/*" required>
+          <input id="videoInput" name="video" type="file" accept="video/*" required>
           <span>选择投篮视频</span>
           <small>支持短视频、单回合片段和较长训练视频，结果页可直接播放诊断视频</small>
         </label>
+        <p id="uploadStatus" class="upload-status" aria-live="polite">
+          当前是公网 demo，建议先上传 80MB 以内的短视频。大文件会先卡在上传阶段，然后分析时间也会明显变长。
+        </p>
 
         <div class="tip-grid">
           <article class="tip-card">
@@ -43,9 +46,131 @@
           </article>
         </div>
 
-        <button type="submit">开始分析</button>
+        <button id="submitButton" type="submit">开始分析</button>
       </form>
     </section>
   </main>
+  <script>
+    const uploadForm = document.getElementById("uploadForm");
+    const videoInput = document.getElementById("videoInput");
+    const submitButton = document.getElementById("submitButton");
+    const uploadStatus = document.getElementById("uploadStatus");
+
+    function formatSize(bytes) {
+      if (!bytes) return "0 MB";
+      return (bytes / 1024 / 1024).toFixed(1) + " MB";
+    }
+
+    function selectedFile() {
+      return videoInput && videoInput.files && videoInput.files[0] ? videoInput.files[0] : null;
+    }
+
+    function updateSelectedFileHint() {
+      const file = selectedFile();
+      if (!file || !uploadStatus) {
+        return;
+      }
+
+      if (file.size > 200 * 1024 * 1024) {
+        uploadStatus.textContent = `当前文件约 ${formatSize(file.size)}。这是大视频，上传到 Render 免费实例后，通常要先等上传完成，再等 2 到 4 分钟分析。`;
+        return;
+      }
+
+      if (file.size > 80 * 1024 * 1024) {
+        uploadStatus.textContent = `当前文件约 ${formatSize(file.size)}。可以继续上传，但等待时间通常会明显变长。`;
+        return;
+      }
+
+      uploadStatus.textContent = `当前文件约 ${formatSize(file.size)}。这个体积更适合公网 demo，通常会更快进入分析。`;
+    }
+
+    if (videoInput) {
+      videoInput.addEventListener("change", updateSelectedFileHint);
+    }
+
+    if (uploadForm) {
+      uploadForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const file = selectedFile();
+
+        if (!file) {
+          if (uploadStatus) {
+            uploadStatus.textContent = "请先选择要上传的投篮视频。";
+          }
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("video", file);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/jobs");
+        xhr.responseType = "json";
+
+        if (submitButton) {
+          submitButton.disabled = true;
+          submitButton.textContent = "正在上传视频...";
+        }
+
+        if (uploadStatus) {
+          uploadStatus.textContent = "正在上传视频 0%";
+        }
+
+        xhr.upload.addEventListener("progress", (progressEvent) => {
+          if (!uploadStatus) {
+            return;
+          }
+          if (progressEvent.lengthComputable && progressEvent.total > 0) {
+            const percent = Math.min(100, Math.round((progressEvent.loaded / progressEvent.total) * 100));
+            uploadStatus.textContent = `正在上传视频 ${percent}%`;
+            return;
+          }
+          uploadStatus.textContent = "正在上传视频...";
+        });
+
+        xhr.addEventListener("load", () => {
+          if (xhr.status !== 202) {
+            if (submitButton) {
+              submitButton.disabled = false;
+              submitButton.textContent = "开始分析";
+            }
+            if (uploadStatus) {
+              uploadStatus.textContent = "上传失败，请稍后重试。";
+            }
+            return;
+          }
+
+          const payload = xhr.response || {};
+          if (!payload.job_id) {
+            if (submitButton) {
+              submitButton.disabled = false;
+              submitButton.textContent = "开始分析";
+            }
+            if (uploadStatus) {
+              uploadStatus.textContent = "上传成功，但任务创建失败，请刷新后重试。";
+            }
+            return;
+          }
+
+          if (uploadStatus) {
+            uploadStatus.textContent = "视频已上传，正在进入分析页...";
+          }
+          window.location.href = `/jobs/${payload.job_id}`;
+        });
+
+        xhr.addEventListener("error", () => {
+          if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.textContent = "开始分析";
+          }
+          if (uploadStatus) {
+            uploadStatus.textContent = "网络异常，上传失败，请稍后再试。";
+          }
+        });
+
+        xhr.send(formData);
+      });
+    }
+  </script>
 </body>
 </html>
