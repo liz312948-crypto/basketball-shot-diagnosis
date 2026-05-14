@@ -3,7 +3,7 @@ services:
     name: basketball-shot-diagnosis
     runtime: python
     rootDir: .
-    buildCommand: pip install -r requirements.txt
+    buildCommand: apt-get update && apt-get install -y fonts-noto-cjk && pip install -r requirements.txt
     startCommand: python -m app.web
     envVars:
       - key: HOST

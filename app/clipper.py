@@ -305,6 +305,7 @@ def _write_diagnosis_image(
     width: int,
     height: int,
 ) -> None:
+    copy = _overlay_copy()
     image = Image.new("RGB", (width, height), "#f5f7f8")
     draw = ImageDraw.Draw(image)
     font_regular = _font(42)
@@ -312,14 +313,14 @@ def _write_diagnosis_image(
     font_small = _font(34)
 
     draw.rounded_rectangle((70, 95, width - 70, height - 95), radius=28, fill="#ffffff", outline="#d9e1e2", width=3)
-    draw.text((110, 140), str(card.get("title", "投篮诊断")), fill="#0d6b73", font=font_bold)
+    draw.text((110, 140), str(card.get("title", copy["diagnosis_title"])), fill="#0d6b73", font=font_bold)
     draw.text((110, 220), str(card.get("level", "")), fill="#c14f26", font=font_regular)
 
     y = 310
     sections = [
-        ("总结", [str(card.get("summary", ""))]),
-        ("发现", [str(item) for item in card.get("findings", [])][:3]),
-        ("建议", [str(item) for item in card.get("drills", [])][:2]),
+        (copy["summary_heading"], [str(card.get("summary", ""))]),
+        (copy["findings_heading"], [str(item) for item in card.get("findings", [])][:3]),
+        (copy["drills_heading"], [str(item) for item in card.get("drills", [])][:2]),
     ]
     for heading, lines in sections:
         draw.text((110, y), heading, fill="#162021", font=font_regular)
@@ -332,7 +333,7 @@ def _write_diagnosis_image(
             y += 10
         y += 18
 
-    draw.text((110, height - 170), "上一段视频已经在问题时刻定格，先看错在哪一帧，再看训练建议。", fill="#62787a", font=font_small)
+    draw.text((110, height - 170), copy["slate_footer"], fill="#62787a", font=font_small)
     image.save(image_path)
 
 
@@ -343,6 +344,7 @@ def _write_issue_freeze_image(
     width: int,
     height: int,
 ) -> None:
+    copy = _overlay_copy()
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     image = Image.fromarray(rgb)
     image = _resize_and_crop(image, width, height)
@@ -352,19 +354,19 @@ def _write_issue_freeze_image(
     font_body = _font(30)
 
     draw.rounded_rectangle((48, 54, width - 48, 210), radius=24, fill=(11, 31, 34, 208))
-    draw.text((82, 88), "问题时刻定格", fill="#ffffff", font=font_title)
+    draw.text((82, 88), copy["freeze_title"], fill="#ffffff", font=font_title)
 
     findings = [str(item) for item in card.get("findings", [])]
-    primary_issue = findings[0] if findings else "这一帧需要重点看出手路径、身体平衡和球路方向。"
+    primary_issue = findings[0] if findings else copy["fallback_issue"]
     for idx, line in enumerate(_wrap_text(draw, primary_issue, font_body, width - 164)[:3]):
         draw.text((82, 146 + idx * 38), line, fill="#d9ecee", font=font_body)
 
     draw.rounded_rectangle((48, height - 240, width - 48, height - 54), radius=24, fill=(255, 255, 255, 216))
-    draw.text((82, height - 208), "建议盯住这里看：", fill="#0d6b73", font=font_title)
-    focus_points = [str(item) for item in card.get("drills", [])[:2]] or ["对照出手方向、弧线高度和身体稳定性。"]
+    draw.text((82, height - 208), copy["focus_title"], fill="#0d6b73", font=font_title)
+    focus_points = [str(item) for item in card.get("drills", [])[:2]] or [copy["fallback_focus"]]
     y = height - 152
     for point in focus_points:
-        for line in _wrap_text(draw, f"• {point}", font_body, width - 164)[:2]:
+        for line in _wrap_text(draw, f"- {point}", font_body, width - 164)[:2]:
             draw.text((82, y), line, fill="#23484b", font=font_body)
             y += 34
         y += 8
@@ -396,16 +398,39 @@ def _resize_and_crop(image: Image.Image, width: int, height: int) -> Image.Image
     return resized.crop((left, top, left + width, top + height))
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = [
+def _font_candidates() -> list[Path]:
+    return [
         Path("C:/Windows/Fonts/msyh.ttc"),
         Path("C:/Windows/Fonts/simhei.ttf"),
         Path("C:/Windows/Fonts/arial.ttf"),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc"),
+        Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/usr/share/fonts/truetype/noto/NotoSansSC-Regular.otf"),
+        Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
+        Path("/usr/share/fonts/truetype/arphic/ukai.ttc"),
     ]
-    for path in candidates:
+
+
+def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    for path in _font_candidates():
         if path.exists():
             return ImageFont.truetype(str(path), size)
     return ImageFont.load_default()
+
+
+def _overlay_copy() -> dict[str, str]:
+    return {
+        "diagnosis_title": "投篮诊断",
+        "summary_heading": "总结",
+        "findings_heading": "发现",
+        "drills_heading": "建议",
+        "slate_footer": "上一段视频已经在问题时刻定格，先看错在哪一帧，再看训练建议。",
+        "freeze_title": "问题时刻定格",
+        "fallback_issue": "这一帧需要重点看出手路径、身体平衡和球路方向。",
+        "focus_title": "建议盯住这里看：",
+        "fallback_focus": "对照出手方向、弧线高度和身体稳定性。",
+    }
 
 
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
