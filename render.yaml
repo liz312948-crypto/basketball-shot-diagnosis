@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: basketball-shot-diagnosis
+    runtime: python
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.web
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PYTHON_VERSION
+        value: 3.12.10

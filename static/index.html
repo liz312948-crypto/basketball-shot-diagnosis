@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>投篮动作诊断</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="panel hero-panel">
+      <div class="title-row">
+        <div>
+          <p class="eyebrow">投篮动作诊断</p>
+          <h1>上传投篮视频，直接拿到中文诊断结果</h1>
+          <p class="hero-copy">
+            系统会先判断视频质量与机位，再决定只做基础诊断，还是继续进入增强诊断。
+            结果页会直接嵌入诊断视频，并在识别到问题时插入定格画面，方便你直接看错在什么动作节点。
+          </p>
+        </div>
+        <span class="badge">中文结果 / 精度优先</span>
+      </div>
+
+      <form action="/process" method="post" enctype="multipart/form-data">
+        <label class="dropzone">
+          <input name="video" type="file" accept="video/*" required>
+          <span>选择投篮视频</span>
+          <small>支持短视频、单回合片段和较长训练视频，结果页可直接播放诊断视频</small>
+        </label>
+
+        <div class="tip-grid">
+          <article class="tip-card">
+            <h3>推荐拍法</h3>
+            <p>优先侧面或 45 度，完整拍到准备、起跳、出手和跟随动作。</p>
+          </article>
+          <article class="tip-card">
+            <h3>诊断策略</h3>
+            <p>低质量视频会降级诊断，不会硬给高可信结论。</p>
+          </article>
+          <article class="tip-card">
+            <h3>结果结构</h3>
+            <p>先看总体结论和可信度，再看主要问题、训练建议、阶段拆解和定格诊断视频。</p>
+          </article>
+        </div>
+
+        <button type="submit">开始分析</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

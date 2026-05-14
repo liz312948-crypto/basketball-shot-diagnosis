@@ -1,0 +1,2 @@
+-r requirements.txt
+mediapipe==0.10.18; python_version < "3.13"

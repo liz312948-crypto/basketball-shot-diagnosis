@@ -1,0 +1,12 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+data/
+
+server.out.log
+server.err.log
+
+.DS_Store
+Thumbs.db
