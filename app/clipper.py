@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import imageio_ffmpeg
@@ -46,6 +47,7 @@ def render_vertical_highlights(
     diagnosis_cards: list[dict[str, object]] | None = None,
     slate_seconds: float = 3.0,
     freeze_seconds: float = 1.8,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> Path:
     if not events:
         raise ValueError("没有检测到可剪辑的投篮片段。")
@@ -71,6 +73,8 @@ def render_vertical_highlights(
             ]
 
         for index, (event, start, end) in enumerate(timeline, start=1):
+            if progress_callback is not None:
+                progress_callback(index, len(timeline))
             clip_duration = max(0.2, end - start)
             action_path = tmp_dir / f"clip_{index:03d}.mp4"
             _render_clip(input_path, action_path, start, clip_duration, target_width, target_height)

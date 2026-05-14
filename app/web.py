@@ -138,9 +138,14 @@ async def process_video(
 async def create_job(
     background_tasks: BackgroundTasks,
     video: UploadFile = File(...),
-) -> dict[str, str]:
+) -> dict[str, object]:
     job = await _create_job_from_upload(background_tasks, video)
-    return {"job_id": job.id, "status": job.status.value}
+    return {
+        "job_id": job.id,
+        "status": job.status.value,
+        "progress_percent": job.progress_percent,
+        "status_detail": job.status_detail,
+    }
 
 
 @app.get("/api/jobs/{job_id}")
@@ -150,6 +155,8 @@ def get_job(job_id: str) -> dict[str, object]:
         "job_id": job.id,
         "status": job.status.value,
         "error": job.error,
+        "progress_percent": job.progress_percent,
+        "status_detail": job.status_detail,
     }
     if job.result is not None:
         payload["result"] = {
@@ -201,9 +208,9 @@ def _require_job(job_id: str) -> JobRecord:
 
 def _render_status_page(job: JobRecord) -> str:
     stage_value = job.status.value
-    progress = STAGE_PROGRESS.get(stage_value, 0)
+    progress = job.progress_percent if job.progress_percent is not None else STAGE_PROGRESS.get(stage_value, 0)
     stage_label = _translate_stage_label(stage_value)
-    stage_eta = _translate_stage_eta(stage_value, job)
+    stage_eta = job.status_detail or _translate_stage_eta(stage_value, job)
     stage_meta_json = json.dumps(
         {
             key: {
@@ -245,6 +252,13 @@ def _render_status_page(job: JobRecord) -> str:
               }}
               const payload = await response.json();
               updateStageUi(payload.status);
+              if (typeof payload.progress_percent === "number") {{
+                if (progressFillEl) progressFillEl.style.width = payload.progress_percent + "%";
+                if (progressValueEl) progressValueEl.textContent = payload.progress_percent + "%";
+              }}
+              if (payload.status_detail && etaEl) {{
+                etaEl.textContent = payload.status_detail;
+              }}
               if (payload.error && errorEl) {{
                 errorEl.textContent = "错误：" + payload.error;
               }}

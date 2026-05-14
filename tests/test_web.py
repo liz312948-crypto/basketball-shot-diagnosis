@@ -33,6 +33,8 @@ def test_create_job_returns_job_id() -> None:
     payload = response.json()
     assert "job_id" in payload
     assert payload["status"] == "uploaded"
+    assert payload["progress_percent"] == 10
+    assert "准备进入分析" in payload["status_detail"]
 
 
 def test_unknown_job_returns_404() -> None:
@@ -174,6 +176,8 @@ def test_status_page_uses_api_polling_instead_of_full_page_reload(tmp_path) -> N
         filename="demo.mp4",
         input_path=tmp_path / "demo.mp4",
         status=JobStatus.RENDERING,
+        progress_percent=94,
+        status_detail="正在生成诊断视频片段 2/3。",
     )
 
     client = TestClient(app)
@@ -187,6 +191,8 @@ def test_status_page_uses_api_polling_instead_of_full_page_reload(tmp_path) -> N
     assert 'class="stage-dot stage-dot-live"' in response.text
     assert "window.location.replace(\"/jobs/poll-job\")" in response.text
     assert "视频已上传，正在分析" in response.text
+    assert "正在生成诊断视频片段 2/3。" in response.text
+    assert "94%" in response.text
 
 
 def test_status_page_uses_larger_eta_for_large_videos(tmp_path) -> None:

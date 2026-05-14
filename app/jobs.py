@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -52,6 +53,8 @@ class JobRecord:
     status: JobStatus
     error: str | None = None
     result: LayeredResult | None = None
+    progress_percent: int | None = None
+    status_detail: str | None = None
 
 
 class InMemoryJobStore:
@@ -73,6 +76,8 @@ class InMemoryJobStore:
             filename=safe_name,
             input_path=self.work_dir / f"{job_id}_{safe_name}",
             status=JobStatus.UPLOADED,
+            progress_percent=10,
+            status_detail="文件已接收，准备进入分析。",
         )
         self.records[job_id] = record
         self._persist_record(record)
@@ -85,7 +90,13 @@ class InMemoryJobStore:
         return record
 
     def get(self, job_id: str) -> JobRecord | None:
-        return self.records.get(job_id)
+        record = self.records.get(job_id)
+        if record is not None:
+            return record
+        loaded = self._load_record_from_path(self._state_path(job_id))
+        if loaded is not None:
+            self.records[job_id] = loaded
+        return loaded
 
     def complete_pipeline(
         self,
@@ -114,6 +125,8 @@ class InMemoryJobStore:
             recommendations=["建议使用稳定的侧面机位重拍。"] if confidence is ConfidenceLevel.LOW else [],
         )
         record.status = JobStatus.DONE
+        record.progress_percent = 100
+        record.status_detail = "分析完成。"
         record.result = LayeredResult(
             precheck=precheck,
             overall_summary=report_overall,
@@ -127,10 +140,14 @@ class InMemoryJobStore:
         record = self.records[job_id]
         try:
             record.status = JobStatus.PRECHECK
+            record.progress_percent = 28
+            record.status_detail = "正在检查机位、清晰度和可分析性。"
             self._persist_record(record)
             precheck = analyze_video_precheck(record.input_path)
 
             record.status = JobStatus.BASE_ANALYSIS
+            record.progress_percent = 52
+            record.status_detail = "正在提取投篮事件并执行基础动作诊断。"
             self._persist_record(record)
             detector = BasketballShotDetector()
             try:
@@ -142,10 +159,14 @@ class InMemoryJobStore:
             enhanced: EnhancedAnalysis | None = None
             if precheck.run_enhanced_analysis and report.analyses:
                 record.status = JobStatus.ENHANCED_ANALYSIS
+                record.progress_percent = 74
+                record.status_detail = "视频质量足够，正在生成增强阶段分析。"
                 self._persist_record(record)
                 enhanced = build_enhanced_analysis(precheck=precheck, report=report)
 
             record.status = JobStatus.RENDERING
+            record.progress_percent = 90
+            record.status_detail = "正在准备诊断视频和结果页资源。"
             self._persist_record(record)
             artifacts = self._write_artifacts(record, report, events)
             record.result = build_layered_result(
@@ -156,10 +177,14 @@ class InMemoryJobStore:
                 enhanced=enhanced,
             )
             record.status = JobStatus.DONE
+            record.progress_percent = 100
+            record.status_detail = "分析完成。"
             self._persist_record(record)
         except Exception as exc:
             record.status = JobStatus.FAILED
             record.error = str(exc)
+            record.progress_percent = 100
+            record.status_detail = "任务失败。"
             self._persist_record(record)
 
     def _write_artifacts(
@@ -179,17 +204,38 @@ class InMemoryJobStore:
         if events:
             output_video = self.output_dir / f"{record.id}_highlight.mp4"
             try:
+                render_events = _select_render_events(events, record.input_path)
+                record.progress_percent = 91
+                record.status_detail = f"正在生成诊断视频片段，预计处理 {len(render_events)} 个关键投篮。"
+                self._persist_record(record)
                 render_vertical_highlights(
                     record.input_path,
-                    events,
+                    render_events,
                     output_video,
-                    diagnosis_cards=_diagnosis_cards_data(report),
-                    slate_seconds=2.4,
+                    diagnosis_cards=_diagnosis_cards_data(report, render_events),
+                    pre_seconds=_render_pre_seconds(record.input_path),
+                    post_seconds=_render_post_seconds(record.input_path),
+                    slate_seconds=_render_slate_seconds(record.input_path),
+                    freeze_seconds=_render_freeze_seconds(record.input_path),
+                    target_width=_render_target_width(record.input_path),
+                    target_height=_render_target_height(record.input_path),
+                    progress_callback=lambda current, total: self._update_render_progress(record, current, total),
                 )
+                record.progress_percent = 99
+                record.status_detail = "诊断视频已生成，正在整理最终结果。"
+                self._persist_record(record)
                 artifacts.highlight_video = output_video.name
             except Exception:
                 artifacts.highlight_video = None
         return artifacts
+
+    def _update_render_progress(self, record: JobRecord, current: int, total: int) -> None:
+        total = max(1, total)
+        # Keep rendering inside 91-98 so the final jump to done still feels coherent.
+        progress = 91 + min(7, int((current / total) * 7))
+        record.progress_percent = progress
+        record.status_detail = f"正在生成诊断视频片段 {current}/{total}。"
+        self._persist_record(record)
 
     def _state_path(self, job_id: str) -> Path:
         return self.state_dir / f"{job_id}.json"
@@ -201,6 +247,8 @@ class InMemoryJobStore:
             "input_path": str(record.input_path),
             "status": record.status.value,
             "error": record.error,
+            "progress_percent": record.progress_percent,
+            "status_detail": record.status_detail,
             "result": None,
         }
         if record.result is not None:
@@ -229,45 +277,59 @@ class InMemoryJobStore:
 
     def _load_records(self) -> None:
         for path in self.state_dir.glob("*.json"):
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                result_payload = payload.get("result")
-                result = None
-                if isinstance(result_payload, dict):
-                    pre = result_payload["precheck"]
-                    result = LayeredResult(
-                        precheck=PrecheckResult(
-                            score=float(pre["score"]),
-                            confidence=ConfidenceLevel(str(pre["confidence"])),
-                            run_enhanced_analysis=bool(pre["run_enhanced_analysis"]),
-                            view_type=str(pre["view_type"]),
-                            summary=str(pre["summary"]),
-                            reasons=list(pre.get("reasons", [])),
-                            recommendations=list(pre.get("recommendations", [])),
-                        ),
-                        overall_summary=str(result_payload.get("overall_summary", "")),
-                        findings=list(result_payload.get("findings", [])),
-                        drills=list(result_payload.get("drills", [])),
-                        enhanced_summary=(
-                            str(result_payload["enhanced_summary"])
-                            if result_payload.get("enhanced_summary") is not None
-                            else None
-                        ),
-                        stage_breakdown=list(result_payload.get("stage_breakdown", [])),
-                        template_comparison=list(result_payload.get("template_comparison", [])),
-                        artifacts=JobArtifacts(**result_payload.get("artifacts", {})),
-                    )
-                record = JobRecord(
-                    id=str(payload["id"]),
-                    filename=str(payload["filename"]),
-                    input_path=Path(str(payload["input_path"])),
-                    status=JobStatus(str(payload["status"])),
-                    error=(str(payload["error"]) if payload.get("error") is not None else None),
-                    result=result,
+            loaded = self._load_record_from_path(path)
+            if loaded is not None:
+                self.records[loaded.id] = loaded
+
+    def _load_record_from_path(self, path: Path) -> JobRecord | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            result_payload = payload.get("result")
+            result = None
+            if isinstance(result_payload, dict):
+                pre = result_payload["precheck"]
+                result = LayeredResult(
+                    precheck=PrecheckResult(
+                        score=float(pre["score"]),
+                        confidence=ConfidenceLevel(str(pre["confidence"])),
+                        run_enhanced_analysis=bool(pre["run_enhanced_analysis"]),
+                        view_type=str(pre["view_type"]),
+                        summary=str(pre["summary"]),
+                        reasons=list(pre.get("reasons", [])),
+                        recommendations=list(pre.get("recommendations", [])),
+                    ),
+                    overall_summary=str(result_payload.get("overall_summary", "")),
+                    findings=list(result_payload.get("findings", [])),
+                    drills=list(result_payload.get("drills", [])),
+                    enhanced_summary=(
+                        str(result_payload["enhanced_summary"])
+                        if result_payload.get("enhanced_summary") is not None
+                        else None
+                    ),
+                    stage_breakdown=list(result_payload.get("stage_breakdown", [])),
+                    template_comparison=list(result_payload.get("template_comparison", [])),
+                    artifacts=JobArtifacts(**result_payload.get("artifacts", {})),
                 )
-                self.records[record.id] = record
-            except Exception:
-                continue
+            return JobRecord(
+                id=str(payload["id"]),
+                filename=str(payload["filename"]),
+                input_path=Path(str(payload["input_path"])),
+                status=JobStatus(str(payload["status"])),
+                error=(str(payload["error"]) if payload.get("error") is not None else None),
+                result=result,
+                progress_percent=(
+                    int(payload["progress_percent"])
+                    if payload.get("progress_percent") is not None
+                    else None
+                ),
+                status_detail=(
+                    str(payload["status_detail"])
+                    if payload.get("status_detail") is not None
+                    else None
+                ),
+            )
+        except Exception:
+            return None
 
 
 def build_layered_result(
@@ -299,9 +361,12 @@ def build_layered_result(
     )
 
 
-def _diagnosis_cards_data(report: AnalysisReport) -> list[dict[str, object]]:
+def _diagnosis_cards_data(report: AnalysisReport, events: list[ShotEvent] | None = None) -> list[dict[str, object]]:
+    selected_times = {round(event.time, 2) for event in events} if events is not None else None
     cards: list[dict[str, object]] = []
     for item in report.analyses:
+        if selected_times is not None and round(item.time, 2) not in selected_times:
+            continue
         cards.append(
             {
                 "title": f"第 {item.index} 次投篮 · {item.time:.2f} 秒",
@@ -312,3 +377,68 @@ def _diagnosis_cards_data(report: AnalysisReport) -> list[dict[str, object]]:
             }
         )
     return cards
+
+
+def _select_render_events(events: list[ShotEvent], input_path: Path) -> list[ShotEvent]:
+    if len(events) <= 3:
+        return events
+    try:
+        size_bytes = input_path.stat().st_size
+    except OSError:
+        size_bytes = 0
+
+    if _is_hosted_demo():
+        limit = 3
+        if size_bytes >= 200 * 1024 * 1024:
+            limit = 2
+        elif size_bytes >= 80 * 1024 * 1024:
+            limit = 3
+    else:
+        limit = 8
+        if size_bytes >= 200 * 1024 * 1024:
+            limit = 4
+        elif size_bytes >= 80 * 1024 * 1024:
+            limit = 6
+
+    ranked = sorted(events, key=lambda event: event.score, reverse=True)[:limit]
+    return sorted(ranked, key=lambda event: event.time)
+
+
+def _render_target_width(input_path: Path) -> int:
+    try:
+        size_bytes = input_path.stat().st_size
+    except OSError:
+        size_bytes = 0
+    if _is_hosted_demo():
+        return 540 if size_bytes >= 80 * 1024 * 1024 else 720
+    return 720 if size_bytes >= 80 * 1024 * 1024 else 1080
+
+
+def _render_target_height(input_path: Path) -> int:
+    try:
+        size_bytes = input_path.stat().st_size
+    except OSError:
+        size_bytes = 0
+    if _is_hosted_demo():
+        return 960 if size_bytes >= 80 * 1024 * 1024 else 1280
+    return 1280 if size_bytes >= 80 * 1024 * 1024 else 1920
+
+
+def _render_pre_seconds(input_path: Path) -> float:
+    return 2.2 if _is_hosted_demo() else 5.0
+
+
+def _render_post_seconds(input_path: Path) -> float:
+    return 2.8 if _is_hosted_demo() else 5.0
+
+
+def _render_slate_seconds(input_path: Path) -> float:
+    return 1.6 if _is_hosted_demo() else 2.4
+
+
+def _render_freeze_seconds(input_path: Path) -> float:
+    return 0.8 if _is_hosted_demo() else 1.8
+
+
+def _is_hosted_demo() -> bool:
+    return bool(os.getenv("RENDER"))
