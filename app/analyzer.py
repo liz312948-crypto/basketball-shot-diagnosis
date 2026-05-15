@@ -50,15 +50,22 @@ def analyze_shots(video_path: str | Path, events: list[ShotEvent]) -> AnalysisRe
     cap.release()
 
     weak_count = sum(1 for item in analyses if item.level == "需要重点改进")
+    optimize_count = sum(1 for item in analyses if item.level == "可以优化")
+
     if weak_count:
         overall = (
-            f"本次共分析 {len(analyses)} 次投篮，其中 {weak_count} 次需要重点改进。"
-            "优先关注出手稳定性、弧线高度和身体控制。"
+            f"本次共分析 {len(analyses)} 次投篮，其中 {weak_count} 次暴露出明显动作风险。"
+            "优先关注出手高度、球路弧线和出手方向的一致性。"
+        )
+    elif optimize_count:
+        overall = (
+            f"本次共分析 {len(analyses)} 次投篮，整体可用，但仍有 {optimize_count} 次存在可优化细节。"
+            "建议继续稳定出手节奏，并减少左右漂移。"
         )
     else:
         overall = (
             f"本次共分析 {len(analyses)} 次投篮，整体节奏比较稳定。"
-            "建议继续保持完整随球动作，并关注出手一致性。"
+            "建议继续保持完整随球动作，并关注每次出手的一致性。"
         )
     return AnalysisReport(overall=overall, analyses=analyses)
 
@@ -173,17 +180,27 @@ def _build_metrics(
         "lateral_drift": 0.0,
         "release_smoothness": 0.0,
         "motion_stability": 0.0,
+        "release_height_ratio": 0.0,
+        "path_direction_consistency": 0.0,
     }
     if len(ball_points) >= 2:
-        xs = np.array([point[1] for point in ball_points])
-        ys = np.array([point[2] for point in ball_points])
+        xs = np.array([point[1] for point in ball_points], dtype=float)
+        ys = np.array([point[2] for point in ball_points], dtype=float)
         first_y = float(ys[0])
         highest_y = float(np.min(ys))
         arc_lift = max(0.0, (first_y - highest_y) / max(1, height))
         lateral_drift = float(np.std(xs) / max(1, width))
+        release_height_ratio = max(0.0, min(1.0, 1.0 - first_y / max(1, height)))
+
         y_steps = np.diff(ys)
+        x_steps = np.diff(xs)
         upward_ratio = float(np.mean(y_steps < 0)) if len(y_steps) else 0.0
-        release_smoothness = max(0.0, min(1.0, upward_ratio * 1.15 - lateral_drift * 1.2))
+        drift_variation = float(np.std(x_steps) / max(1, width)) if len(x_steps) else 0.0
+        path_direction_consistency = max(0.0, min(1.0, upward_ratio * 0.85 + (1.0 - drift_variation * 8.0) * 0.15))
+        release_smoothness = max(
+            0.0,
+            min(1.0, upward_ratio * 0.75 + path_direction_consistency * 0.2 - lateral_drift * 0.75),
+        )
 
         metrics.update(
             {
@@ -191,6 +208,8 @@ def _build_metrics(
                 "arc_lift": round(arc_lift, 3),
                 "lateral_drift": round(lateral_drift, 3),
                 "release_smoothness": round(release_smoothness, 3),
+                "release_height_ratio": round(release_height_ratio, 3),
+                "path_direction_consistency": round(path_direction_consistency, 3),
             }
         )
 
@@ -209,10 +228,15 @@ def _diagnose(metrics: dict[str, float | int | str]) -> tuple[list[str], list[st
     lateral_drift = float(metrics["lateral_drift"])
     smoothness = float(metrics["release_smoothness"])
     stability = float(metrics["motion_stability"])
+    release_height = float(metrics.get("release_height_ratio", 0.0))
+    path_consistency = float(metrics.get("path_direction_consistency", 0.0))
 
     if visible < 3:
         findings.append("篮球在画面中可追踪的帧数太少，出手与球路信息不完整。")
-        drills.append("重拍时保持球、手臂和篮筐同时入镜，再做 10 次定点投篮。")
+        drills.append("重拍时保持球、手肘和篮筐尽量同框，再做 10 次定点投篮。")
+    if release_height < 0.24 and visible >= 3:
+        findings.append("出手点偏低，球离手时的高度不足，容易把弧线压平。")
+        drills.append("做单手近筐托举投篮，刻意把出手高度抬高到眉线以上。")
     if arc_lift < 0.08:
         findings.append("球路上升幅度偏低，出手弧线不够，容易形成平推。")
         drills.append("做近距离高弧线投篮练习，重点体会先向上再向前的出手路径。")
@@ -221,7 +245,10 @@ def _diagnose(metrics: dict[str, float | int | str]) -> tuple[list[str], list[st
         drills.append("做单手定点投篮，辅助手只负责扶球，出手后食指保持指向篮心。")
     if smoothness < 0.35 and visible >= 3:
         findings.append("出手轨迹不够连贯，动作节奏存在停顿或发力断点。")
-        drills.append("做连续举球到出手练习，保持下肢发力、手臂上举、拨球一气呵成。")
+        drills.append("做连续举球到出手练习，保持下肢发力、手肘上举、拨球一气呵成。")
+    if path_consistency < 0.58 and visible >= 3:
+        findings.append("球路前几帧方向不够一致，说明离手瞬间的发力线还不稳定。")
+        drills.append("拍慢动作时重点检查手腕跟随方向，避免离手瞬间横向甩臂。")
     if stability < 0.58:
         findings.append("投篮前后身体和画面波动较大，重心控制不稳。")
         drills.append("练习原地 1-2 步接球投篮，落地后保持身体朝向篮筐 1 秒。")
@@ -233,7 +260,7 @@ def _diagnose(metrics: dict[str, float | int | str]) -> tuple[list[str], list[st
 
 
 def _level_from_findings(findings: list[str]) -> str:
-    weak_terms = ("偏低", "漂移", "不够", "波动", "太少", "断点", "不稳")
+    weak_terms = ("偏低", "漂移", "不够", "波动", "太少", "断点", "不稳", "不足")
     issue_count = sum(any(term in finding for term in weak_terms) for finding in findings)
     if issue_count >= 3:
         return "需要重点改进"

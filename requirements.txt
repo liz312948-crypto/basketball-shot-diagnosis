@@ -5,3 +5,4 @@ opencv-python-headless==4.10.0.84
 numpy==1.26.4
 imageio-ffmpeg==0.5.1
 pillow>=11.0.0
+mediapipe==0.10.18; python_version < "3.13"
